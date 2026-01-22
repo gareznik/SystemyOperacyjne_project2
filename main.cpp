@@ -9,36 +9,29 @@
 #include <cstdlib>
 #include <ctime>
 
-// --- Konfiguracja symulacji ---
 struct Config {
-    int total_tables;       // Liczba stołów
-    int max_ingredients;    // Maksymalna liczba składników
-    int max_cutlery;        // Maksymalna liczba sztućców
+    int total_tables;     
+    int max_ingredients;    
+    int max_cutlery;        
 };
 
-// --- Pamięć współdzielona (Stan restauracji) ---
-// Ta struktura będzie znajdować się w pamięci współdzielonej (Shared Memory)
-// i będzie dostępna dla wszystkich procesów.
 struct SharedState {
-    pthread_mutex_t mutex; // Muteks do synchronizacji procesów
+    pthread_mutex_t mutex;
 
-    int free_tables;       // Wolne stoły
-    int ingredients;       // Aktualna liczba składników
-    int clean_cutlery;     // Czyste sztućce
-    int dirty_cutlery;     // Brudne sztućce
-    int happy_customers;   // Liczba obsłużonych klientów
-    int rejected_customers;// Liczba klientów odprawionych z kwitkiem
+    int free_tables;
+    int ingredients;    
+    int clean_cutlery;
+    int dirty_cutlery;
+    int happy_customers;  
+    int rejected_customers;
     
-    bool running;          // Flaga działania symulacji
+    bool running;    
 };
 
-// Globalne wskaźniki (będą wskazywać na obszar mmap)
 SharedState* state = nullptr;
 Config config;
 
-// --- Inicjalizacja pamięci współdzielonej ---
 void init_shared_memory() {
-    // Alokujemy pamięć dostępną do odczytu i zapisu, współdzieloną (MAP_SHARED)
     void* mem = mmap(NULL, sizeof(SharedState), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
         perror("Błąd mmap");
@@ -62,24 +55,21 @@ void init_shared_memory() {
     state->running = true;
 }
 
-// --- Proces: Wizualizacja (NCurses) ---
 void process_visualizer() {
-    initscr();            // Inicjalizacja ncurses
-    curs_set(0);          // Ukrycie kursora
-    start_color();        // Włączenie kolorów
+    initscr();     
+    curs_set(0);      
+    start_color();    
     use_default_colors();
-    noecho();             // Nie pokazuj wpisywanych znaków
+    noecho();     
 
-    // Definicja par kolorów
-    init_pair(1, COLOR_GREEN, -1);  // Zasoby OK
-    init_pair(2, COLOR_RED, -1);    // Braki / Błędy
-    init_pair(3, COLOR_YELLOW, -1); // Ostrzeżenia / Praca w toku
-    init_pair(4, COLOR_CYAN, -1);   // Nagłówki
+    init_pair(1, COLOR_GREEN, -1);
+    init_pair(2, COLOR_RED, -1);
+    init_pair(3, COLOR_YELLOW, -1);
+    init_pair(4, COLOR_CYAN, -1);
 
     while (state->running) {
         clear(); // Czyszczenie ekranu
-        
-        // Rysowanie ramki
+
         box(stdscr, 0, 0);
         
         attron(COLOR_PAIR(4) | A_BOLD);
@@ -122,22 +112,16 @@ void process_visualizer() {
 
         pthread_mutex_unlock(&state->mutex); // Odblokowujemy dostęp
 
-        mvprintw(10, 2, "Logi procesow:");
-        mvprintw(11, 4, "Kelner sprawdza sale...");
-        mvprintw(12, 4, "Zmywak pracuje...");
-        mvprintw(13, 4, "Dostawca czeka na zamowienie...");
-
-        refresh();      // Odświeżenie ekranu
-        usleep(100000); // Czekamy 100ms przed kolejną klatką
+        refresh();
+        usleep(100000);
     }
     endwin(); // Zakończenie trybu ncurses
     exit(0);
 }
 
-// --- Proces: Dostawca (Supplier) ---
 void process_supplier() {
     while (state->running) {
-        sleep(3); // Dostawa zajmuje czas (co 3 sekundy)
+        sleep(4); // Dostawa zajmuje czas (co 4sekundy)
         
         pthread_mutex_lock(&state->mutex);
         if (state->ingredients < config.max_ingredients) {
@@ -152,14 +136,12 @@ void process_supplier() {
     exit(0);
 }
 
-// --- Proces: Zmywacz (Dishwasher) ---
 void process_dishwasher() {
     while (state->running) {
-        usleep(1500000); // Mycie co 1.5 sekundy
+        usleep(1500000); 
         
         pthread_mutex_lock(&state->mutex);
         if (state->dirty_cutlery > 0) {
-            // Myjemy jeden zestaw sztućców
             state->dirty_cutlery--;
             state->clean_cutlery++;
         }
@@ -168,46 +150,38 @@ void process_dishwasher() {
     exit(0);
 }
 
-// --- Proces: Generator Klientów (Pętla główna) ---
-// Symuluje przybycie gości i pracę kelnera
 void process_customers() {
     srand(time(NULL));
     
     while (state->running) {
-        usleep(rand() % 1000000 + 500000); // Klient przychodzi co 0.5 - 1.5 sekundy
+        usleep(rand() % 1000000 + 500000); 
 
         pthread_mutex_lock(&state->mutex);
         
-        // Logika: Czy możemy posadzić klienta?
-        // Potrzebny jest: wolny stół, składniki na danie i czyste sztućce
+        //czy możemy posadzić klienta? potrzebny jest stol produkty oraz sztucce
         bool can_seat = (state->free_tables > 0) && 
                         (state->ingredients > 0) && 
                         (state->clean_cutlery > 0);
 
         if (can_seat) {
-            // Sadzamy klienta (pobieramy zasoby)
             state->free_tables--;
             state->ingredients--;
             state->clean_cutlery--;
             
             // Tworzymy nowy proces (fork) dla klienta, który "je"
             if (fork() == 0) {
-                // PROCES DZIECKO: Klient je posiłek
-                pthread_mutex_unlock(&state->mutex); // Dziecko odziedziczyło blokadę, musimy ją zwolnić!
-                
+                pthread_mutex_unlock(&state->mutex); 
                 sleep(rand() % 4 + 2); // Jedzenie trwa 2-5 sekund
-                
-                // Klient zjadł, wychodzi
                 pthread_mutex_lock(&state->mutex);
-                state->free_tables++;   // Zwalniamy stół
-                state->dirty_cutlery++; // Sztućce stają się brudne
+                state->free_tables++;
+                state->dirty_cutlery++; 
                 state->happy_customers++;
                 pthread_mutex_unlock(&state->mutex);
                 exit(0); // Proces klienta kończy się
             }
             // PROCES RODZIC (Generator) kontynuuje pętlę
         } else {
-            state->rejected_customers++; // Klient odszedł niezadowolony
+            state->rejected_customers++;
         }
 
         pthread_mutex_unlock(&state->mutex);
@@ -215,7 +189,6 @@ void process_customers() {
 }
 
 int main(int argc, char* argv[]) {
-    // Wczytywanie parametrów startowych
     std::cout << "Podaj liczbe stolow: ";
     if (!(std::cin >> config.total_tables)) config.total_tables = 5;
     
@@ -225,10 +198,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Podaj max ilosc sztuccow: ";
     if (!(std::cin >> config.max_cutlery)) config.max_cutlery = 10;
 
-    // Inicjalizacja pamięci
     init_shared_memory();
 
-    // Tworzenie procesów (fork)
     pid_t pid_vis = fork();
     if (pid_vis == 0) process_visualizer();
 
@@ -238,13 +209,10 @@ int main(int argc, char* argv[]) {
     pid_t pid_dish = fork();
     if (pid_dish == 0) process_dishwasher();
 
-    // Główny proces staje się generatorem klientów
     process_customers();
 
-    // Oczekiwanie na zakończenie (formalność, bo pętla jest nieskończona)
     wait(NULL); 
     
-    // Sprzątanie zasobów
     pthread_mutex_destroy(&state->mutex);
     munmap(state, sizeof(SharedState));
     
